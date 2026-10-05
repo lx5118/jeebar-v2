@@ -21,6 +21,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".FullScreenActivity"
+            android:exported="false" />
+
         <service
             android:name=".OverlayService"
             android:exported="false"
