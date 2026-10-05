@@ -57,25 +57,12 @@ class OverlayService : Service() {
         "com.facebook.katana",
         "com.netflix.mediaclient"
     )
-    private val ytPkgs = setOf("com.google.android.youtube", "app.revanced.android.youtube")
     private val INSTA = "com.instagram.android"
     private val instaGraceMs = 10 * 60 * 1000L   // Insta stays open this long after a notification
     private val remindEveryMs = 5 * 60 * 1000L   // meme again if you stay inside the app
     private val quickReentryMs = 30 * 1000L      // re-open within this gap: no new meme
     private val flashGapMs = 10 * 60 * 1000L     // flash card at most once per 10 min
     // =====================================================
-
-    private val quotes = listOf(
-        "aaj ka PYQ, kal ka rank",
-        "phone band. organic on.",
-        "discipline > motivation",
-        "IIT wait kar raha hai",
-        "ek aur mechanism, ek aur mark",
-        "NCERT line by line",
-        "consistency banati hai topper",
-        "abhi dard, baad mein rank",
-        "tu kar sakta hai. baith ja."
-    )
 
     private val green = Color.parseColor("#00FF41")
     private lateinit var wm: WindowManager
@@ -94,7 +81,6 @@ class OverlayService : Service() {
     private var lastFlash = 0L
     private var lastMeme = -1
     private var receiverOn = false
-    private val gameCache = HashMap<String, Boolean>()
 
     private val loop = object : Runnable {
         override fun run() {
@@ -102,7 +88,7 @@ class OverlayService : Service() {
             try { tickBar(now) } catch (e: Exception) { }
             try { tickFocus(now) } catch (e: Exception) { }
             try { tickWatcher(now) } catch (e: Exception) { }
-            try { if (n % 60L == 0L) tickReminders(now) } catch (e: Exception) { }
+            try { if (n % 60L == 0L) Reminders.check(this@OverlayService, now) } catch (e: Exception) { }
             n++
             handler.postDelayed(this, 1000L - System.currentTimeMillis() % 1000L)
         }
@@ -122,14 +108,6 @@ class OverlayService : Service() {
     private fun canDraw(): Boolean = android.provider.Settings.canDrawOverlays(this)
 
     // ===================== bottom bar =====================
-    private fun milestone(days: Long): String? {
-        if (days <= 7L) return "last week. sab kuch jhok de."
-        if (days <= 30L) return "30 din se kam. all in."
-        if (days <= 50L) return "50 din se kam. pace badhao."
-        if (days <= 100L) return "100 din se kam. ab serious."
-        return null
-    }
-
     private fun tickBar(now: Long) {
         val left = target - now
         val sep = if (n % 2L == 0L) ":" else " "
@@ -155,8 +133,8 @@ class OverlayService : Service() {
 
         if (n % 15L == 0L) {
             val days = if (left > 0L) left / 86400000L else 0L
-            val m = milestone(days)
-            quoteTv?.text = if (m != null && (n / 15L) % 3L == 0L) m else quotes[((n / 15L) % quotes.size).toInt()]
+            val m = Texts.milestone(days)
+            quoteTv?.text = if (m != null && (n / 15L) % 3L == 0L) m else Texts.quotes[((n / 15L) % Texts.quotes.size).toInt()]
         }
     }
 
@@ -170,57 +148,15 @@ class OverlayService : Service() {
             val b = Store.getInt(this, "breakMin", 10)
             Store.putStr(this, "fPhase", "break")
             Store.putLong(this, "fEnd", now + b * 60_000L)
-            alert(3001, "Focus complete \u2705", "Break time: $b min. Paani pi, stretch kar.")
+            Reminders.alert(this, 3001, "Focus complete \u2705", "Break time: $b min. Paani pi, stretch kar.")
         } else {
             Store.putStr(this, "fPhase", "none")
             Store.putLong(this, "fEnd", 0L)
-            alert(3002, "Break over", "Agla focus session shuru karo.")
+            Reminders.alert(this, 3002, "Break over", "Agla focus session shuru karo.")
         }
     }
 
     // ===================== reminders =====================
-    private fun tickReminders(now: Long) {
-        val revs = Store.revs(this)
-        var changed = false
-        for (r in revs) {
-            if (Store.isDue(r) && r.notified < r.stage) {
-                alert(1000 + (r.id % 100000L).toInt(), "Revise: " + r.topic, "review " + (r.stage + 1) + " of 4 due")
-                r.notified = r.stage
-                changed = true
-            }
-        }
-        if (changed) Store.saveRevs(this, revs)
-
-        val cal = Calendar.getInstance()
-        if (cal.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY && cal.get(Calendar.HOUR_OF_DAY) >= 9) {
-            val today = Store.dayKey(0)
-            if (Store.getStr(this, "mockRemind") != today) {
-                var last = 0L
-                for (m in Store.mocks(this)) {
-                    if (m.first > last) last = m.first
-                }
-                if (now - last > 6L * Store.DAY) {
-                    alert(2000, "Weekly mock test", "Is hafte ka mock diya? Score log karo.")
-                }
-                Store.putStr(this, "mockRemind", today)
-            }
-        }
-    }
-
-    private fun alert(id: Int, title: String, text: String) {
-        val nm = getSystemService(NotificationManager::class.java)
-        val open = PendingIntent.getActivity(
-            this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
-        )
-        val nb = Notification.Builder(this, "jeealerts")
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setContentIntent(open)
-            .setAutoCancel(true)
-        nm.notify(id, nb.build())
-    }
-
     // ===================== app watcher =====================
     private fun tickWatcher(now: Long) {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
@@ -250,7 +186,7 @@ class OverlayService : Service() {
 
         // 1) hard locks: focus, night, schedule, YouTube limit
         if (hard) {
-            val reason = blockReason(pkg)
+            val reason = Rules.blockReason(this, pkg)
             if (reason != null) {
                 if (entered == pkg) Toast.makeText(this, reason, Toast.LENGTH_SHORT).show()
                 goHome()
@@ -277,43 +213,7 @@ class OverlayService : Service() {
         if (freshOpen || stayedLong) showMeme()
     }
 
-    private fun blockReason(pkg: String): String? {
-        if (Store.focusPhase(this) == "focus") return "Focus mode \uD83D\uDD12 padhai chalu hai"
-        val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        if (Store.getBool(this, "nightOn", true) && (h >= 23 || h < 5)) {
-            return "Night lock \uD83D\uDE34 so jao"
-        }
-        if (Store.getBool(this, "lockOn", false)) {
-            val s = Store.getInt(this, "lockStart", 18)
-            val e = Store.getInt(this, "lockEnd", 22)
-            val inside = if (s <= e) (h >= s && h < e) else (h >= s || h < e)
-            if (inside) return "Study lock \uD83D\uDD12 $s:00 - $e:00"
-        }
-        if (pkg in ytPkgs) {
-            val lim = Store.getInt(this, "ytLimit", 30)
-            if (lim > 0 && Store.useSecs(this, pkg, 0) >= lim * 60L) {
-                return "YouTube limit khatam \uD83D\uDD12"
-            }
-        }
-        return null
-    }
-
-    private fun isGame(pkg: String): Boolean {
-        val cached = gameCache[pkg]
-        if (cached != null) return cached
-        var result = false
-        try {
-            val ai = packageManager.getApplicationInfo(pkg, 0)
-            @Suppress("DEPRECATION")
-            val byFlag = (ai.flags and ApplicationInfo.FLAG_IS_GAME) != 0
-            result = ai.category == ApplicationInfo.CATEGORY_GAME || byFlag
-        } catch (e: Exception) {
-        }
-        gameCache[pkg] = result
-        return result
-    }
-
-    private fun isDistraction(pkg: String): Boolean = pkg in distractions || isGame(pkg)
+    private fun isDistraction(pkg: String): Boolean = pkg in distractions || Rules.isGame(this, pkg)
     private fun isHardTarget(pkg: String): Boolean = pkg == INSTA || isDistraction(pkg)
 
     private fun goHome() {
@@ -359,41 +259,17 @@ class OverlayService : Service() {
         wm.addView(v, lp)
     }
 
-    private fun memeSources(): List<String> {
-        val out = ArrayList<String>()
-        for (i in 1..9) {
-            val id = resources.getIdentifier("meme$i", "raw", packageName)
-            if (id != 0) out.add("android.resource://" + packageName + "/" + id)
-        }
-        val files = Store.memeDir(this).listFiles()
-        if (files != null) {
-            for (f in files) out.add(Uri.fromFile(f).toString())
-        }
-        return out
-    }
-
-    private fun makeVideo(uri: String): VideoView {
-        val vv = VideoView(this)
-        vv.setVideoURI(Uri.parse(uri))
-        vv.setOnPreparedListener { mp ->
-            mp.isLooping = true
-            mp.setVolume(1f, 1f)
-        }
-        vv.start()
-        return vv
-    }
-
     private fun showMeme() {
         lastShown = System.currentTimeMillis()
         val dp = resources.displayMetrics.density
 
-        val src = memeSources()
+        val src = Media.sources(this)
         var video: VideoView? = null
         if (src.isNotEmpty()) {
             var i = src.indices.random()
             if (src.size > 1 && i == lastMeme) i = (i + 1) % src.size
             lastMeme = i
-            video = makeVideo(src[i])
+            video = Media.video(this, src[i])
         }
 
         val col = LinearLayout(this)
@@ -407,7 +283,7 @@ class OverlayService : Service() {
             vlp.bottomMargin = (16 * dp).toInt()
             col.addView(video, vlp)
         }
-        col.addView(mono(quotes.random(), 12f, 160))
+        col.addView(mono(Texts.quotes.random(), 12f, 160))
         val b1 = LinearLayout.LayoutParams(-1, -2)
         b1.topMargin = (24 * dp).toInt()
         col.addView(obtn("padhne chala \u2713", true) { dismissMeme(true) }, b1)
@@ -527,4 +403,98 @@ class OverlayService : Service() {
         t.setTextColor(green)
         t.setShadowLayer(10f, 0f, 0f, green)
         t.textSize = 15f
-        t.letterSpacing = 0.12
+        t.letterSpacing = 0.12f
+        t.gravity = Gravity.CENTER
+        timeTv = t
+
+        val inf = TextView(this)
+        inf.typeface = Typeface.MONOSPACE
+        inf.setTextColor(Color.argb(190, 0, 255, 65))
+        inf.textSize = 10f
+        inf.letterSpacing = 0.08f
+        inf.gravity = Gravity.CENTER
+        infoTv = inf
+
+        val qt = TextView(this)
+        qt.typeface = Typeface.MONOSPACE
+        qt.setTextColor(Color.argb(140, 0, 255, 65))
+        qt.textSize = 9f
+        qt.letterSpacing = 0.15f
+        qt.gravity = Gravity.CENTER
+        quoteTv = qt
+
+        val r = LinearLayout(this)
+        r.orientation = LinearLayout.VERTICAL
+        r.setBackgroundColor(Color.argb(210, 0, 0, 0))
+        r.setPadding(0, 0, 0, (6 * dp).toInt())
+        r.addView(line, LinearLayout.LayoutParams(-1, maxOf(1, dp.toInt())))
+        val tlp = LinearLayout.LayoutParams(-1, -2)
+        tlp.topMargin = (5 * dp).toInt()
+        r.addView(t, tlp)
+        r.addView(inf, LinearLayout.LayoutParams(-1, -2))
+        r.addView(qt, LinearLayout.LayoutParams(-1, -2))
+        root = r
+
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        lp.gravity = Gravity.BOTTOM
+        wm.addView(r, lp)
+    }
+
+    private fun startInForeground() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel("jeebar", "JEE Bar", NotificationManager.IMPORTANCE_MIN)
+        )
+        nm.createNotificationChannel(
+            NotificationChannel("jeealerts", "JEE Reminders", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        val stop = PendingIntent.getService(
+            this, 0, Intent(this, OverlayService::class.java).setAction("STOP"),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val open = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        val notif = Notification.Builder(this, "jeebar")
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("JEE countdown running")
+            .setContentIntent(open)
+            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .build()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(1, notif)
+        }
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(loop)
+        if (receiverOn) {
+            try { unregisterReceiver(unlockReceiver) } catch (e: Exception) { }
+            receiverOn = false
+        }
+        val m = memeView
+        if (m != null) wm.removeView(m)
+        memeView = null
+        val f = flashView
+        if (f != null) wm.removeView(f)
+        flashView = null
+        val r = root
+        if (r != null) wm.removeView(r)
+        root = null
+        super.onDestroy()
+    }
+}
+       
+     
+
+     
