@@ -43,12 +43,16 @@ class OverlayService : Service() {
         "org.mozilla.firefox_beta",
         "org.mozilla.fenix",
         "org.mozilla.focus",
-        "com.instagram.android",
         "com.snapchat.android",
         "com.twitter.android",
         "com.facebook.katana",
         "com.netflix.mediaclient"
     )
+
+    // Instagram stays locked unless a notification arrived in the last X minutes
+    // (or one is still sitting in the notification shade)
+    private val INSTA = "com.instagram.android"
+    private val instaGraceMs = 10 * 60 * 1000L
 
     private val remindEveryMs = 5 * 60 * 1000L   // reminder again if you stay in the app
     private val quickReentryMs = 30 * 1000L      // fresh open within this gap won't re-trigger
@@ -123,7 +127,19 @@ class OverlayService : Service() {
         lastQuery = now
 
         val pkg = currentPkg ?: return
-        if (pkg == packageName || memeView != null || !isDistraction(pkg)) return
+        if (pkg == packageName) return
+        if (pkg == INSTA) {
+            if (!InstaGate.allowed(instaGraceMs)) {
+                if (entered != null) {
+                    android.widget.Toast.makeText(
+                        this, "Insta locked \uD83D\uDD12 notification aaye tab hi", android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+                goHome()
+            }
+            return
+        }
+        if (memeView != null || !isDistraction(pkg)) return
 
         val sinceLast = now - lastShown
         val freshOpen = entered != null && sinceLast > quickReentryMs
@@ -184,9 +200,9 @@ class OverlayService : Service() {
                 })
             }
             addView(mono(quotes.random(), 12f, 160))
-            addView(btn("padhne chala ✓", true) { dismissMeme(goHome = true) },
+            addView(btn("padhne chala ✓", true) { dismissMeme(home = true) },
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = (24 * dp).toInt() })
-            addView(btn("5 min aur", false) { dismissMeme(goHome = false) },
+            addView(btn("5 min aur", false) { dismissMeme(home = false) },
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = (8 * dp).toInt() })
         }
 
@@ -206,16 +222,18 @@ class OverlayService : Service() {
         wm.addView(memeView, lp)
     }
 
-    private fun dismissMeme(goHome: Boolean) {
+    private fun dismissMeme(home: Boolean) {
         memeView?.let { wm.removeView(it) }
         memeView = null
         lastShown = System.currentTimeMillis()
-        if (goHome) {
-            startActivity(
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }
+        if (home) goHome()
+    }
+
+    private fun goHome() {
+        startActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     // ---------- bottom bar ----------
